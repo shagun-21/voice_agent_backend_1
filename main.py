@@ -1,17 +1,21 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
 from sqlalchemy import create_engine, Column, Integer, String, TIMESTAMP
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
-from fastapi import Request
+import requests
+import json
 
-# DB CONFIG (replace with your Supabase credentials)
+# ----------------------
+# CONFIG
+# ----------------------
 DATABASE_URL = "postgresql://postgres.fieqbixfeysdtvzzkaws:Shagun20013001@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres"
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "llama3"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
-
 Base = declarative_base()
 
 app = FastAPI()
@@ -32,92 +36,175 @@ class LeadDB(Base):
 Base.metadata.create_all(bind=engine)
 
 # ----------------------
-# REQUEST MODEL
-# ----------------------
-class Lead(BaseModel):
-    name: str
-    interest: str
-    budget: str
-
-# ----------------------
 # BUSINESS LOGIC
 # ----------------------
 def classify_lead(budget):
     try:
-        if int(budget) >= 50000:
-            return "HIGH"
-        else:
-            return "LOW"
+        return "HIGH" if int(str(budget).replace(",", "").replace(".", "").strip()) >= 50000 else "LOW"
     except:
         return "UNKNOWN"
 
 # ----------------------
-# API ENDPOINT
+# TRANSCRIPT EXTRACTOR
+# Handles every payload shape Bolna might send
 # ----------------------
-# @app.post("/api/lead")
-# def create_lead(lead: Lead):
-#     db = SessionLocal()
+def extract_transcript(data: dict) -> str:
+    return (
+        data.get("transcript") or
+        data.get("arguments", {}).get("transcript") or
+        data.get("param", {}).get("transcript") or
+        data.get("data", {}).get("transcript") or
+        data.get("tool_input", {}).get("transcript") or
+        ""
+    )
 
-#     lead_type = classify_lead(lead.budget)
+# ----------------------
+# OLLAMA EXTRACTION
+# ----------------------
+def extract_with_ollama(transcript: str):
+    prompt = f"""
+You are a strict JSON extractor.
 
-#     db_lead = LeadDB(
-#         name=lead.name,
-#         interest=lead.interest,
-#         budget=lead.budget,
-#         lead_type=lead_type
-#     )
+Extract:
+- name
+- interest
+- budget
 
-#     db.add(db_lead)
-#     db.commit()
-#     db.refresh(db_lead)
+Rules:
+- Return ONLY JSON, nothing else
+- No explanation, no markdown, no backticks
+- Budget must be a number only
+- Always close the JSON properly
+- Name must be written in English (romanized), even if spoken in Hindi or another language
+- Interest must be in English
 
-#     return {
-#         "message": "Lead stored successfully",
-#         "lead_type": lead_type
-#     }
+Format:
+{{
+  "name": "string",
+  "interest": "string",
+  "budget": "number"
+}}
 
-# @app.post("/api/lead")
-# async def create_lead(request: Request):
-#     data = await request.json()
-#     print("RAW DATA:", data)
-#     return {"status": "received"}
+Conversation:
+{transcript}
+"""
 
-from fastapi import Request
+    try:
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=120
+        )
 
-@app.post("/api/lead")
-async def create_lead(request: Request):
+        result = response.json()
+        text_output = result.get("response", "").strip()
+        print("RAW OLLAMA OUTPUT:", text_output)
+
+        # Clean out markdown fences if present
+        text_output = text_output.replace("```json", "").replace("```", "").strip()
+
+        # Extract JSON block safely
+        start = text_output.find("{")
+        end = text_output.rfind("}")
+
+        if start != -1 and end != -1:
+            cleaned = text_output[start:end+1]
+        else:
+            cleaned = text_output
+
+        if not cleaned.endswith("}"):
+            cleaned += "}"
+
+        print("CLEANED JSON:", cleaned)
+        return json.loads(cleaned)
+
+    except Exception as e:
+        print("OLLAMA ERROR:", str(e))
+        return {
+            "name": "Unknown",
+            "interest": "Unknown",
+            "budget": "0"
+        }
+
+# ----------------------
+# DEBUG ENDPOINT
+# Point Bolna here temporarily to see exact payload shape
+# Visit http://localhost:4040 in browser to see ngrok logs
+# ----------------------
+@app.post("/debug")
+async def debug_payload(request: Request):
     try:
         data = await request.json()
     except:
         data = {}
+    print("=== BOLNA DEBUG PAYLOAD ===")
+    print(json.dumps(data, indent=2))
+    return {"received": data}
 
-    print("RAW DATA:", data)
+# ----------------------
+# MAIN ENDPOINT
+# ----------------------
+@app.post("/api/lead")
+async def create_lead(request: Request):
+    try:
+        data = await request.json()
+    except Exception as e:
+        return {"error": f"Failed to parse request body: {str(e)}"}
 
-    # Handle different formats
-    payload = data.get("arguments", data)
+    print("RAW FROM BOLNA:", json.dumps(data, indent=2))
 
-    name = payload.get("name", "Unknown")
-    interest = payload.get("interest", "Unknown")
-    budget = payload.get("budget", "0")
+    transcript = extract_transcript(data)
 
-    db = SessionLocal()
+    if not transcript:
+        return {
+            "error": "No transcript found in payload",
+            "received_keys": list(data.keys()),
+            "full_payload": data  # remove this line once working
+        }
 
+    print("TRANSCRIPT PREVIEW:", transcript[:300])
+
+    extracted = extract_with_ollama(transcript)
+
+    name     = extracted.get("name", "Unknown")
+    interest = extracted.get("interest", "Unknown")
+    budget   = str(extracted.get("budget", "0"))
     lead_type = classify_lead(budget)
 
-    db_lead = LeadDB(
-        name=name,
-        interest=interest,
-        budget=budget,
-        lead_type=lead_type
-    )
+    db = SessionLocal()
+    try:
+        db_lead = LeadDB(
+            name=name,
+            interest=interest,
+            budget=budget,
+            lead_type=lead_type
+        )
+        db.add(db_lead)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print("DB ERROR:", str(e))
+        return {"error": f"Database error: {str(e)}"}
+    finally:
+        db.close()
 
-    db.add(db_lead)
-    db.commit()
+    return {
+        "message": "Lead stored successfully",
+        "data": extracted,
+        "lead_type": lead_type
+    }
 
-    return {"message": "Lead stored"}
-
-
+# ----------------------
+# GET ALL LEADS
+# ----------------------
 @app.get("/api/leads")
 def get_leads():
     db = SessionLocal()
-    return db.query(LeadDB).all()
+    try:
+        return db.query(LeadDB).all()
+    finally:
+        db.close()
