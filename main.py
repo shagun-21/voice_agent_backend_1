@@ -76,11 +76,45 @@ def classify_lead(budget):
 #         "lead_type": lead_type
 #     }
 
+# @app.post("/api/lead")
+# async def create_lead(request: Request):
+#     data = await request.json()
+#     print("RAW DATA:", data)
+#     return {"status": "received"}
+
+from fastapi import Request
+
 @app.post("/api/lead")
 async def create_lead(request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+    except:
+        data = {}
+
     print("RAW DATA:", data)
-    return {"status": "received"}
+
+    # Handle different formats
+    payload = data.get("arguments", data)
+
+    name = payload.get("name", "Unknown")
+    interest = payload.get("interest", "Unknown")
+    budget = payload.get("budget", "0")
+
+    db = SessionLocal()
+
+    lead_type = classify_lead(budget)
+
+    db_lead = LeadDB(
+        name=name,
+        interest=interest,
+        budget=budget,
+        lead_type=lead_type
+    )
+
+    db.add(db_lead)
+    db.commit()
+
+    return {"message": "Lead stored"}
 
 
 @app.get("/api/leads")
