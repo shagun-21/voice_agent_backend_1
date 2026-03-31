@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
 # DB CONFIG (replace with your Supabase credentials)
-DATABASE_URL = "postgresql://postgres:Shagun20013001@db.fieqbixfeysdtvzzkaws.supabase.co:5432/postgres"
+DATABASE_URL = "postgresql://postgres.fieqbixfeysdtvzzkaws:Shagun20013001@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres"
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
