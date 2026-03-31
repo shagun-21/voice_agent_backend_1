@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, Column, Integer, String, TIMESTAMP
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
+from fastapi import Request
 
 # DB CONFIG (replace with your Supabase credentials)
 DATABASE_URL = "postgresql://postgres.fieqbixfeysdtvzzkaws:Shagun20013001@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres"
@@ -53,27 +54,33 @@ def classify_lead(budget):
 # ----------------------
 # API ENDPOINT
 # ----------------------
+# @app.post("/api/lead")
+# def create_lead(lead: Lead):
+#     db = SessionLocal()
+
+#     lead_type = classify_lead(lead.budget)
+
+#     db_lead = LeadDB(
+#         name=lead.name,
+#         interest=lead.interest,
+#         budget=lead.budget,
+#         lead_type=lead_type
+#     )
+
+#     db.add(db_lead)
+#     db.commit()
+#     db.refresh(db_lead)
+
+#     return {
+#         "message": "Lead stored successfully",
+#         "lead_type": lead_type
+#     }
+
 @app.post("/api/lead")
-def create_lead(lead: Lead):
-    db = SessionLocal()
-
-    lead_type = classify_lead(lead.budget)
-
-    db_lead = LeadDB(
-        name=lead.name,
-        interest=lead.interest,
-        budget=lead.budget,
-        lead_type=lead_type
-    )
-
-    db.add(db_lead)
-    db.commit()
-    db.refresh(db_lead)
-
-    return {
-        "message": "Lead stored successfully",
-        "lead_type": lead_type
-    }
+async def create_lead(request: Request):
+    data = await request.json()
+    print("RAW DATA:", data)
+    return {"status": "received"}
 
 
 @app.get("/api/leads")
